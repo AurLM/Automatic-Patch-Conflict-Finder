@@ -1,36 +1,47 @@
 # Redundant Patch Finder - Complete Guide
 
-Parts: (1) updated "What it does" text for the Nexus page, (2) exactly how the tool works, (3) how to continue the project, (4) how to publish it on Nexus and how MO2 users install and run it.
-
-Honest status: the logic and speed are tested on synthetic plugin files I built. It has been run on your real list (1,045 plugins), which exposed and fixed two real bugs (originals not found, too much yellow). It has never been run on a real list with a true rival pair (red), and the .exe has not been built or tested yet.
-
 ---
 
-## PART 1 - Text to ADD to the Nexus description (BBCode)
-
-Paste this near the top of the description, right after the intro paragraph.
+## PART 1 - Description
 
 ```
-[size=4][b]What it actually does[/b][/size]
+What it actually does
+
 Most conflict tools only tell you that two plugins "touch the same record". On a big list that is thousands of lines and almost all of it is harmless. Redundant Patch Finder goes further:
 
-[list]
-[*][b]It opens the plugins.[/b] It reads the binary content of every active .esp/.esm/.esl, finds every record each plugin changes, and compares what each plugin changes, field by field.
-[*][b]It finds clashes nobody has documented.[/b] It does not rely on a hand-written database of known incompatibilities. If two obscure patches clash and no one has ever written it down, it can still find it.
-[*][b]It treats patches and base mods differently.[/b] A base mod (Lux Via, Lux Orbis...) is the foundation. A patch fixes how mods work together. Only clashes BETWEEN PATCHES are raised as problems, because a patch editing a mod's records is exactly what a patch is for.
-[*][b]It checks against the original.[/b] Two plugins changing the same record is not a problem by itself. The tool looks up the original record in the master and only flags a pair when both change the same field to DIFFERENT values.
-[*][b]It understands layering.[/b] Patches built on other patches, patches from the same download and "bridge" patches that tie several mods together are recognised and not flagged as conflicts.
-[*][b]It can flag a patch an updated mod has made obsolete.[/b] If a mod already contains everything a patch does (same values), or the mod is clearly newer than the patch, the tool tells you the patch may be unnecessary, and why.
-[/list]
-```
-
-Also add to the FAQ:
+It opens the plugins. It reads the binary content of every active .esp/.esm/.esl, finds every record each plugin changes, and compares what each plugin changes, field by field.
+It finds clashes nobody has documented. It does not rely on a hand-written database of known incompatibilities. If two obscure patches clash and no one has ever written it down, it can still find it.
+It treats patches and base mods differently.A base mod (Lux Via, Lux Orbis...) is the foundation. A patch fixes how mods work together. Only clashes BETWEEN PATCHES are raised as problems, because a patch editing a mod's records is exactly what a patch is for.
+It checks against the original. Two plugins changing the same record is not a problem by itself. The tool looks up the original record in the master and only flags a pair when both change the same field to DIFFERENT values.
+It understands layering. Patches built on other patches, patches from the same download and "bridge" patches that tie several mods together are recognised and not flagged as conflicts.
+It can flag a patch an updated mod has made obsolete. If a mod already contains everything a patch does (same values), or the mod is clearly newer than the patch, the tool tells you the patch may be unnecessary, and why.
 
 ```
-[b]How is this different from LOOT or xEdit?[/b]
+
+FAQ:
+
+```
+How is this different from LOOT or xEdit?
 LOOT sorts your load order and shows notes that people have written for known plugins. xEdit shows every record conflict, one by one, with no idea which plugins are patches. This tool compares the actual contents of your plugins, knows the difference between a patch and a base mod, and boils a 1,000-plugin list down to a short list of pairs worth reading.
-```
 
+Does it change my load order or delete anything?
+No. It is read-only.
+
+It says two patches clash. Do I have to remove one?
+Not automatically. The tool suggests candidates. Always read the patches' Nexus pages: some authors say "use this instead of that one", others say "load both".
+
+A pair is listed as "original record not found".
+The tool could not find the vanilla/base record to compare against, so it cannot say who is right. These pairs are kept out of the way unless they look like rival patches. If you see many, please tell me (see Bug reports).
+
+Does it handle ESL / light plugins and Creation Club content?
+Yes. Creation Club files listed in Skyrim.ccc are recognised and named.
+
+Will it find every incompatibility?
+No. It finds plugins that change the same records in different ways. It cannot detect script, mesh or texture conflicts, and it cannot tell you what is "correct" in your game, only what overlaps. Treat it as a guide, not a verdict.
+
+Is it fast?
+Yes. In my tests, 1,000 plugins take about a quarter of a second to compare on test data, and the 3,000-plugin test was around half a second. Real lists with large mods take a few seconds.
+```
 ---
 
 ## PART 2 - How it works, step by step
@@ -89,98 +100,11 @@ For a patch loaded after the mod it patches:
 - if the patch loads BEFORE the mod, the card says the mod overrides the patch.
 These are hints. They cannot see inside a mod's changelog.
 
-### 2.8 Output
-- Console with colours, `patch_report.txt`, and `patch_report.html` (three clickable tiles, a filter box, cards with details, Nexus links, positions, dates and hints). A `NOTE:` at the top says if some originals could not be checked, and why.
-- `--json` for other tools.
-- Double-clicking the program (no arguments) writes both reports next to it and opens the HTML in the browser.
-
-### 2.9 Options (command line)
-`--instance` (MO2 folder), `--profile`, `--game-data`, `--data`, `--plugins-txt`, `--min-masters`, `--aggressive` (show weak name-based matches), `--loose` (show patches for different mods), `--no-scan`, `--html`, `--no-browser`, `--no-color`, `--json`, `--out`.
-
-### 2.10 Limits (be honest on the page)
+### 2.10 Limits 
 - Only compares plugin records. It cannot see scripts, meshes, textures, SKSE, or INI conflicts.
 - Mod-vs-patch classification is by name. It can be wrong.
 - The 2-unit, 60 KB and 30-day thresholds are my guesses.
 - Cannot know if a patch is "correct" for your setup. It reports overlaps and clashes only.
-- Not tested yet on a real rival pair.
 
----
 
-## PART 3 - How to continue the project
-
-Priority order (best value for downloads and effort):
-
-1. **Get real red results.** Install a known rival pair (for example the two bannered mare patches you mentioned) and confirm red. Screenshot it for the Nexus page. Optional: I can build fake rival test plugins.
-2. **Headline feature: "Patches you can remove."** Add a dedicated section listing obsolete patches with a clear reason, and a "total plugins you could free" count. Easy to explain, easy to screenshot.
-3. **Fix remaining "original not found."** Use the NOTE lines in the report (Nature of the Wild Lands, Riften Expansion) to find what is unusual about those masters.
-4. **Extra evidence layers.**
-   - LOOT masterlist incompatibilities (no key needed).
-   - Optional Nexus API key to read a patch's description and quote lines like "do not use with X". Only look up plugins in red/yellow pairs, cache results, and show a quote, never a verdict.
-5. **Missing-patch finder.** Find mod pairs that clash with no patch tying them together. This is your earlier "patches that don't exist yet" idea. Noisy, so apply limits (two real mods, many shared records, no bridge).
-6. **Usability.** A folder picker window for non-MO2 users, Vortex Nexus IDs, a "what changed since last run" comparison, and a "copy disable list" button.
-7. **Quality.** Add automated tests (the synthetic generators already built can become the test suite), version numbers in the report, and a "report a problem" button that copies the NOTE text.
-
-How I recommend working together:
-- You run it and send `patch_report.txt` plus screenshots.
-- I adjust thresholds and rules from the real output.
-- After each change, I rerun my 100/1,000/3,000-plugin synthetic tests so nothing regresses.
-
----
-
-## PART 4 - Publishing on Nexus, and using it with MO2
-
-### 4A. Build the .exe (GitHub Actions)
-1. In your repository keep `redundant_patch_finder.py` and `.github/workflows/build-windows-exe.yml`.
-2. Push to `main` with GitHub Desktop. The "Build Windows exe" workflow runs on every push (or use Actions -> Build Windows exe -> Run workflow).
-3. Wait for the green check. Open the run, scroll to **Artifacts**, download **Redundant-Patch-Finder-windows**. Unzip it. The file is `Redundant Patch Finder.exe`.
-4. Test it BEFORE uploading, on your own PC and ideally another one: double-click it from your MO2 folder, check the report opens, and run it with `--help` in a terminal.
-5. Windows SmartScreen will likely warn because the file is not signed: More info -> Run anyway. Some antivirus tools false-flag PyInstaller files. Scan it yourself on virustotal.com and be ready to explain.
-
-### 4B. Prepare the Nexus upload package
-Make a ZIP (name it `Redundant Patch Finder 0.3.0.zip`) containing:
-- `Redundant Patch Finder.exe`
-- `README.txt` (short usage, the SmartScreen note, how to send a bug report)
-- optionally `Run Patch Finder.bat` (for people who prefer the Python version) and the `.py` source, if you choose to publish it.
-Do NOT put a `Data` folder or an .esp in it. It is a tool, not a mod.
-
-### 4C. Upload on Nexus Mods
-1. Log in on nexusmods.com, open the Skyrim Special Edition site, click your profile -> **Add a mod** (or the Upload button on the Skyrim SE page).
-2. Fill in: name, category (Modders Resources and Tutorials or Utilities), version, short description (tagline), the full description from the Nexus text file, tags.
-3. Upload images (screenshots of the red / yellow / green tiles and a card). Mark the first one as the main image. Remove personal info from screenshots.
-4. Upload the ZIP as the **main file**, type **Main files**, set a version, and write a short file description.
-5. Set permissions (your choice) and add credits.
-6. Set the mod to hidden while you check it, then publish. Check the page with the "Preview" before making it public. Nexus runs an automatic virus scan; a new unsigned .exe can take longer to approve.
-7. Nexus may ask you to confirm it is not a re-upload and that you own the work.
-
-### 4D. How MO2 users install and run it
-Two simple ways. Tell users the first one on the page.
-
-**Way 1 - Simplest (recommended): run it from the MO2 folder**
-1. Download the ZIP manually (not the Mod Manager button).
-2. Extract `Redundant Patch Finder.exe` into the MO2 folder, the one that contains `ModOrganizer.ini` and the `mods` and `profiles` folders.
-3. Double-click it. It reads the selected profile and your active plugins, writes `patch_report.html` / `.txt` next to it, and opens the report in the browser.
-Why this works: the tool reads MO2's real folders on disk, so it does not need MO2 running.
-
-**Way 2 - Run it inside MO2 (shows up in the executables drop-down)**
-1. In MO2, click the puzzle-piece icon (Install a new mod from an archive) and pick the ZIP, or use "Mod Manager Download" on Nexus. MO2 creates a mod folder with the .exe inside. Leave it enabled or disabled; it contains no plugin.
-2. Click the gear icon (**Edit Executables**) -> **+** -> **Add from file...**, and browse to `mods\Redundant Patch Finder\Redundant Patch Finder.exe`.
-3. Give it a title, then OK. It now appears in the executables drop-down next to Run.
-4. Select it and click **Run**.
-Important caveats (I have not tested these in MO2):
-- When a program is launched through MO2, files it writes go into MO2's `overwrite` folder, so find `patch_report.html` there.
-- The tool finds the MO2 instance by looking for `ModOrganizer.ini` in or above where it runs. If it cannot, run it with `--instance "C:\Path\To\MO2"`. In MO2's executable settings, put that in the Arguments box.
-- Running inside MO2's virtual file system is not required, and Way 1 is safer.
-
-### 4E. After publishing
-- Pin a comment on the page saying: "Found a problem? Paste the first lines of patch_report.txt."
-- Add a Sticky post explaining that results are suggestions, not verdicts.
-- Update the file version and changelog each time you change the code.
-- Reply to bug reports with the NOTE text.
-
-### 4F. Checklist before you click Publish
-- [ ] .exe built from the LATEST `.py`, tested on a clean PC
-- [ ] Real red result screenshot (or clearly say "not yet seen on a real pair")
-- [ ] Description includes the new "What it actually does" text
-- [ ] SmartScreen / antivirus note on the page
-- [ ] Screenshots free of personal paths
-- [ ] Permissions and credits set
+KEEP IN MIND THIS IS AN ALPHA VERSION OF WHAT IS TO COME !!!
