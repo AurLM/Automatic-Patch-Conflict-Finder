@@ -24,9 +24,9 @@ jobs:
         run: pyinstaller --onefile --name "Conflicting Patch Finder" conflicting_patch_finder.py
 
       - name: Smoke test (the exe must start and print its help)
-        run: .\dist\"Redundant Patch Finder.exe" --help
+        run: .\dist\"Conflicting Patch Finder.exe" --help
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Redundant-Patch-Finder-windows
-          path: dist/Redundant Patch Finder.exe
+          name: Conflicting-Patch-Finder-windows
+          path: dist/Conflicting Patch Finder.exe
