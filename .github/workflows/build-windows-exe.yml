@@ -1,0 +1,32 @@
+# Builds "Redundant Patch Finder.exe" on a Windows machine at GitHub, so users need NO Python.
+# Put this file in your repository at:  .github/workflows/build-windows-exe.yml
+name: Build Windows exe
+
+on:
+  workflow_dispatch:      # adds a "Run workflow" button on the Actions tab
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+
+      - name: Build a single .exe
+        run: pyinstaller --onefile --name "Redundant Patch Finder" redundant_patch_finder.py
+
+      - name: Smoke test (the exe must start and print its help)
+        run: .\dist\"Redundant Patch Finder.exe" --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Redundant-Patch-Finder-windows
+          path: dist/Redundant Patch Finder.exe
