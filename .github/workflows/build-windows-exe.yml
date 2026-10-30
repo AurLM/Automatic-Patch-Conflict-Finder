@@ -21,7 +21,7 @@ jobs:
         run: python -m pip install pyinstaller
 
       - name: Build a single .exe
-        run: pyinstaller --onefile --name "Redundant Patch Finder" redundant_patch_finder.py
+        run: pyinstaller --onefile --name "Conflicting Patch Finder" conflicting_patch_finder.py
 
       - name: Smoke test (the exe must start and print its help)
         run: .\dist\"Redundant Patch Finder.exe" --help
