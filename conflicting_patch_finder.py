@@ -1153,8 +1153,7 @@ def run(args):
                        args.aggressive), encoding="utf-8")
         print("Visual report saved to %s" % args.html, file=sys.stderr)
         if getattr(args, "open_browser", False):
-            import webbrowser
-            webbrowser.open(Path(args.html).resolve().as_uri())
+            open_report(Path(args.html).resolve())
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         print("\nReport saved to %s" % args.out, file=sys.stderr)
@@ -1168,8 +1167,9 @@ C = {"reset": "\033[0m", "bold": "\033[1m", "dim": "\033[2m", "red": "\033[91m",
 def use_color(force_off=False):
     if force_off or os.environ.get("NO_COLOR") or not sys.stdout.isatty():
         return False
-    if os.name == "nt":
-        os.system("")  # switches on ANSI colour support in the Windows 10/11 console
+    if os.name == "nt":                # colours only where the console is known to understand them
+        return bool(os.environ.get("WT_SESSION") or os.environ.get("ConEmuANSI") == "ON"
+                    or os.environ.get("ANSICON") or os.environ.get("TERM"))
     return True
 
 
@@ -1308,6 +1308,32 @@ def pause():
         pass
 
 
+def report_dir(args):
+    """Where to write the reports. With MO2 this is the MO2 folder itself: files written inside the
+    'mods' folder by a program that MO2 launches are hidden in MO2's virtual file system, so a browser
+    could not find them."""
+    try:
+        inst = Path(args.instance) if args.instance else None
+        if inst is None:
+            found = find_instances()
+            inst = found[0] if found else None
+        if inst is not None and (inst / "ModOrganizer.ini").is_file():
+            return inst
+    except Exception:  # noqa: BLE001
+        pass
+    return Path.cwd()
+
+
+def open_report(path):
+    """Open the HTML report in the default browser; always print where it is."""
+    print("Report: %s" % path, file=sys.stderr)
+    try:
+        import webbrowser
+        webbrowser.open(path.as_uri())
+    except Exception:  # noqa: BLE001
+        print("Could not open the browser. Open this file yourself: %s" % path, file=sys.stderr)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Find conflicting patches and missing masters. Works with Mod Organizer 2, "
@@ -1337,11 +1363,14 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
-    double_clicked = argv is None and len(sys.argv) == 1  # no arguments given
+    # "interactive" = started by double-click OR from MO2's executables list (with or without --instance):
+    # no output options given, so write the two reports and open the HTML.
+    double_clicked = argv is None and not (args.html or args.out or args.json)
+    rdir = report_dir(args) if double_clicked else Path.cwd()
     if double_clicked and not args.out:
-        args.out = str(Path.cwd() / "patch_report.txt")
+        args.out = str(rdir / "patch_report.txt")
     if double_clicked and not args.html:
-        args.html = str(Path.cwd() / "patch_report.html")
+        args.html = str(rdir / "patch_report.html")
     args.open_browser = bool(args.html) and double_clicked and not args.no_browser
     try:
         run(args)
@@ -1355,7 +1384,7 @@ def main(argv=None):
         import traceback
         tb = traceback.format_exc()
         try:
-            Path.cwd().joinpath("patch_finder_error.txt").write_text(tb, encoding="utf-8")
+            rdir.joinpath("patch_finder_error.txt").write_text(tb, encoding="utf-8")
         except OSError:
             pass
         print("\nSomething went wrong. Please copy ALL of the text below and send it to the "

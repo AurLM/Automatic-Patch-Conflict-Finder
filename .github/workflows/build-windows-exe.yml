@@ -1,6 +1,7 @@
-# Builds "Conflicting Patch Finder.exe" on a Windows machine at GitHub, so users need NO Python.
+# Builds THREE versions so you can scan each on virustotal.com and keep the one that is flagged least.
 # Put this file in your repository at:  .github/workflows/build-windows-exe.yml
-name: Build Windows exe
+# Also keep in the repository: conflicting_patch_finder.py, README.txt, Run Conflicting Patch Finder.bat
+name: Build Conflicting Patch Finder
 
 on:
   workflow_dispatch:      # adds a "Run workflow" button on the Actions tab
@@ -8,25 +9,64 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  # A) PyInstaller folder build with a bootloader compiled on the spot (flagged far less than the ready-made one)
+  pyinstaller-own-bootloader:
     runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install PyInstaller
-        run: python -m pip install pyinstaller
-
-      - name: Build a single .exe
-        run: pyinstaller --onefile --name "Conflicting Patch Finder" conflicting_patch_finder.py
-
-      - name: Smoke test (the exe must start and print its help)
-        run: .\dist\"Conflicting Patch Finder.exe" --help
-
+      - name: Install PyInstaller and compile its bootloader from source
+        run: python -m pip install wheel setuptools && python -m pip install pyinstaller --no-binary pyinstaller
+      - name: Build (folder, no UPX)
+        run: pyinstaller --onedir --noupx --name "Conflicting Patch Finder" conflicting_patch_finder.py
+      - name: Smoke test
+        run: .\dist\"Conflicting Patch Finder"\"Conflicting Patch Finder.exe" --help
+      - name: Add the read-me
+        shell: bash
+        run: if [ -f README.txt ]; then cp README.txt "dist/Conflicting Patch Finder/"; fi
       - uses: actions/upload-artifact@v4
         with:
-          name: Conflicting-Patch-Finder-windows
-          path: dist/Conflicting Patch Finder.exe
+          name: A-PyInstaller-own-bootloader
+          path: dist/Conflicting Patch Finder
+
+  # B) Nuitka: compiles the Python code to a real program instead of packing it (usually flagged less)
+  nuitka:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Nuitka
+        run: python -m pip install nuitka
+      - name: Build (standalone folder)
+        run: python -m nuitka --standalone --assume-yes-for-downloads --output-filename="Conflicting Patch Finder.exe" --output-dir=build conflicting_patch_finder.py
+      - name: Smoke test
+        run: .\build\conflicting_patch_finder.dist\"Conflicting Patch Finder.exe" --help
+      - name: Add the read-me
+        shell: bash
+        run: if [ -f README.txt ]; then cp README.txt build/conflicting_patch_finder.dist/; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: B-Nuitka
+          path: build/conflicting_patch_finder.dist
+
+  # C) No .exe at all: the script + launcher + read-me (needs Python 3.8+ on the user's PC, but nothing to flag)
+  source-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect files
+        run: |
+          mkdir pkg
+          cp conflicting_patch_finder.py pkg/
+          cp README.txt pkg/ 2>/dev/null || true
+          cp "Run Conflicting Patch Finder.bat" pkg/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: C-Python-script-and-launcher
+          path: pkg
