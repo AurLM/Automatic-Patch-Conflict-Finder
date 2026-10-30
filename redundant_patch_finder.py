@@ -464,6 +464,7 @@ def judge_pair(a, b, keys, ctx):
         base = ctx["base"](key)
         if base is None:
             unverified += 1
+            harmless["UNCHECKED: they differ, but the original record was not found"] += 1
             continue
         rbase, mbase, nbase = base
         pos = pos_info(rtype, ra, rb, rbase)
@@ -494,39 +495,67 @@ def judge_pair(a, b, keys, ctx):
     return conflicts, reverts, dict(harmless), unverified
 
 
+DIAG = {"nopath": set(), "notfound": defaultdict(int)}   # why originals could not be found
+
+
 class BaseStore:
     """Looks up the ORIGINAL version of a record in the plugin that created it."""
     def __init__(self, index, wanted):
-        self.index, self.found, self.maps, self.meta = index, {}, {}, {}
-        by_master = defaultdict(set)
-        for master, lid in wanted:
-            by_master[master].add(lid)
-        for master, lids in by_master.items():
-            path = index.get(master)
-            if path is None:
-                continue
-            try:
-                masters = read_header(path)["masters"]
-                f = open(path, "rb")
-                buf = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-                pos, end, n, left = 24 + struct.unpack_from("<I", buf, 4)[0], len(buf), len(masters), set(lids)
-                while pos + 24 <= end and left:
-                    if buf[pos:pos + 4] == b"GRUP":
-                        pos += 24
-                        continue
-                    size, _fl, fid = struct.unpack_from("<III", buf, pos + 4)
-                    if (fid >> 24) == n and (fid & 0xFFFFFF) in left:
-                        left.discard(fid & 0xFFFFFF)
-                        self.found[(master, fid & 0xFFFFFF)] = pos
-                    pos += 24 + size
-                self.maps[master] = buf
-                self.meta[master] = ([m.lower() for m in masters], master)
-            except Exception:  # noqa: BLE001 - an unreadable master just means "unverified"
-                continue
+        self.index, self.found, self.maps, self.meta, self.alias = index, {}, {}, {}, {}
+        todo = set(wanted)
+        seen = set()
+        for _round in range(12):                  # follow "override of an override" chains down to the original
+            by_master = defaultdict(set)
+            for master, lid in todo:
+                if (master, lid) not in seen:
+                    seen.add((master, lid))
+                    by_master[master].add(lid)
+            todo = set()
+            for master, lids in by_master.items():
+                path = index.get(master)
+                if path is None:
+                    DIAG["nopath"].add(master)
+                    continue
+                try:
+                    if master not in self.maps:
+                        masters = read_header(path)["masters"]
+                        f = open(path, "rb")
+                        self.maps[master] = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+                        self.meta[master] = ([m.lower() for m in masters], master)
+                    buf = self.maps[master]
+                    mlist = self.meta[master][0]
+                    pos, end, n, left = 24 + struct.unpack_from("<I", buf, 4)[0], len(buf), len(mlist), set(lids)
+                    while pos + 24 <= end and left:
+                        if buf[pos:pos + 4] == b"GRUP":
+                            pos += 24
+                            continue
+                        size, _fl, fid = struct.unpack_from("<III", buf, pos + 4)
+                        low = fid & 0xFFFFFF
+                        if low in left:
+                            idx = fid >> 24
+                            if idx == n:
+                                left.discard(low)
+                                self.found[(master, low)] = pos
+                            elif idx < n:         # this plugin only overrides it: the original is in ITS master
+                                left.discard(low)
+                                nxt = (mlist[idx], low)
+                                self.alias[(master, low)] = nxt
+                                todo.add(nxt)
+                        pos += 24 + size
+                except Exception:  # noqa: BLE001 - an unreadable master just means "unverified"
+                    continue
+            if not todo:
+                break
 
     def __call__(self, key):
+        for _ in range(12):
+            if key in self.alias:
+                key = self.alias[key]
+            else:
+                break
         pos = self.found.get(key)
         if pos is None:
+            DIAG["notfound"][key[0]] += 1
             return None
         try:
             rec = parse_record(self.maps[key[0]], pos)
@@ -674,6 +703,12 @@ def analyse_overlaps(plugins, active, index, min_masters, max_records=MAX_PATCH_
             verdict = "HARMLESS"
         elif conflicts and rival:
             verdict = "CONFLICT"
+        elif (not conflicts and harmless.get("UNCHECKED: they differ, but the original record was not found")
+              and kind[a] == "patch" and kind[b] == "patch"
+              and why.startswith(("patches for different", "rival patches", "one patch covers"))):
+            verdict = "OVERLAP"
+            hints.append("These two patches change the same records differently, but I could not find the "
+                         "ORIGINAL records to say who is right. Check both Nexus pages: you may need only one.")
         elif obsolete or ((conflicts or reverts) and kind[a] == "patch" and kind[b] == "patch"
                           and why.startswith(("patches for different", "rival patches", "one patch covers"))):
             verdict = "OVERLAP"    # yellow: only patch-vs-patch clashes, or a patch the mod made useless
@@ -775,12 +810,25 @@ def pos_text(pos):
             "apart (height difference %+.0f)" % (pos["first_move"], pos["second_move"], pos["gap"], pos["dz"]))
 
 
+def diag_lines():
+    """Explain why some original records could not be found (so the user can tell me)."""
+    if not DIAG["nopath"] and not DIAG["notfound"]:
+        return []
+    out = ["NOTE: some original records could not be checked."]
+    if DIAG["nopath"]:
+        out.append("  Master files not found on disk: " + ", ".join(sorted(DIAG["nopath"])[:15]))
+    if DIAG["notfound"]:
+        top = sorted(DIAG["notfound"].items(), key=lambda t: -t[1])[:8]
+        out.append("  Record not found inside: " + ", ".join("%s (%d)" % t for t in top))
+    return out + [""]
+
+
 def format_overlaps(overlaps, stats, show_all=False, limit=30):
     red = [o for o in overlaps if o["verdict"] == "CONFLICT"]
     yellow = [o for o in overlaps if o["verdict"] == "OVERLAP"]
     green = [o for o in overlaps if o["verdict"] in ("HARMLESS", "UNVERIFIED")]
     scanned, hubs = stats[0], stats[1]
-    out = ["== RED: RIVAL PATCHES THAT CLASH (%d) ==" % len(red),
+    out = diag_lines() + ["== RED: RIVAL PATCHES THAT CLASH (%d) ==" % len(red),
            "(Two PATCHES for the SAME mods, made separately, that change the same thing differently.", " Only one can work.)", ""]
     if not red:
         out += ["None found.", ""]
@@ -1099,6 +1147,9 @@ def build_html(findings, overlaps, ov_stats, total, unreadable, plugins, index, 
     n_red = len(red) + len(dups)
     miss_note = ('<a class="note2 warn" href="#missing">%d missing master(s), click to see</a>' % len(miss)) if miss \
         else '<span class="note2 ok">No missing masters</span>'
+    d = diag_lines()
+    if d:
+        miss_note += '<div class="note2 warn">' + "<br>".join(e(x.strip()) for x in d if x.strip()) + "</div>"
     return """<!doctype html><html><head><meta charset="utf-8"><title>Redundant Patch Finder</title><style>
 html{scroll-behavior:smooth}body{background:#14161a;color:#e6e6e6;font:15px/1.5 Segoe UI,system-ui,sans-serif;padding:24px;max-width:1000px;margin:auto}
 h1{margin:0 0 4px}h2{margin-top:34px;border-bottom:1px solid #333;padding-bottom:6px;scroll-margin-top:12px}.muted{color:#8a8f98;font-size:13px}
