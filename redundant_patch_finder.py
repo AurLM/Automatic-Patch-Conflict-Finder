@@ -560,6 +560,7 @@ class BaseStore:
         try:
             rec = parse_record(self.maps[key[0]], pos)
         except Exception:  # noqa: BLE001
+            DIAG["notfound"][key[0] + " (unreadable record)"] += 1
             return None
         masters, name = self.meta[key[0]]
         return rec, masters, name
@@ -705,12 +706,13 @@ def analyse_overlaps(plugins, active, index, min_masters, max_records=MAX_PATCH_
             verdict = "CONFLICT"
         elif (not conflicts and harmless.get("UNCHECKED: they differ, but the original record was not found")
               and kind[a] == "patch" and kind[b] == "patch"
-              and why.startswith(("patches for different", "rival patches", "one patch covers"))):
+              and why.startswith("rival patches")):
             verdict = "OVERLAP"
             hints.append("These two patches change the same records differently, but I could not find the "
                          "ORIGINAL records to say who is right. Check both Nexus pages: you may need only one.")
         elif obsolete or ((conflicts or reverts) and kind[a] == "patch" and kind[b] == "patch"
-                          and why.startswith(("patches for different", "rival patches", "one patch covers"))):
+                          and why.startswith(("patches for different", "rival patches", "one patch covers") if loose
+                                     else ("rival patches", "one patch covers"))):
             verdict = "OVERLAP"    # yellow: only patch-vs-patch clashes, or a patch the mod made useless
         elif unverified and not harmless:
             verdict = "UNVERIFIED"
