@@ -1,4 +1,4 @@
-# Builds "Redundant Patch Finder.exe" on a Windows machine at GitHub, so users need NO Python.
+# Builds "Conflicting Patch Finder.exe" on a Windows machine at GitHub, so users need NO Python.
 # Put this file in your repository at:  .github/workflows/build-windows-exe.yml
 name: Build Windows exe
 
