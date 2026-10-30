@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Redundant Patch Finder for Skyrim SE / AE  (Mod Organizer 2)
+Conflicting Patch Finder for Skyrim SE / AE  (Mod Organizer 2)
 
 Reads the header of every ACTIVE plugin in your MO2 profile and flags:
   1. Patches that require exactly the same set of mods (likely duplicates),
@@ -22,7 +22,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.5.0-alpha"
+ROOM_MIN = 5               # a plugin "decorates" a room when it adds at least this many new objects there
+ROOM_HUB = 12              # rooms decorated by more plugins than this are ignored (noise)
 NEW_ABS, NEW_FRAC = 20, 0.15   # a plugin adding more than this much of its own content is a mod/addon, not a patch
 MAX_PATCH_RECORDS = 4000   # plugins bigger than this are mods, not patches; skipped in record scan
 HUB_LIMIT = 150            # a record edited by more plugins than this is ignored (noise)
@@ -149,6 +151,66 @@ def scan_overrides(path, masters):
             n_new += 1                                  # a record this plugin creates itself
         pos += 24 + size
     return out, n_new
+
+
+def scan_rooms(path, masters, own_name):
+    """Which INTERIOR rooms does this plugin add new objects to? Returns {cell_key: (n_new_objects, cell_record_pos)}.
+    Only walks the CELL top group (everything else is skipped by size), so it is fast."""
+    out = {}
+    f = open(path, "rb")
+    try:
+        data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    except ValueError:                      # empty file
+        f.close()
+        return out
+    try:
+        if data[:4] != b"TES4":
+            return out
+        n_masters, low = len(masters), [m.lower() for m in masters]
+        end = len(data)
+        pos = 24 + struct.unpack_from("<I", data, 4)[0]
+        while pos + 24 <= end:
+            if data[pos:pos + 4] != b"GRUP":
+                break
+            gsize = struct.unpack_from("<I", data, pos + 4)[0]
+            if data[pos + 8:pos + 12] != b"CELL" or gsize < 24:
+                pos += gsize                # not interior cells: jump over the whole group
+                continue
+            gend, pos = min(pos + gsize, end), pos + 24
+            cur, cellpos = None, {}
+            while pos + 24 <= gend:
+                rtype = data[pos:pos + 4]
+                size = struct.unpack_from("<I", data, pos + 4)[0]
+                if rtype == b"GRUP":
+                    label, gtype = struct.unpack_from("<II", data, pos + 8)
+                    cur = label if gtype in (6, 8, 9, 10) else None
+                    pos += 24
+                    continue
+                flags, fid = struct.unpack_from("<II", data, pos + 8)
+                if rtype == b"CELL":
+                    cur = None
+                    cellpos[fid] = pos
+                elif cur is not None and rtype in (b"REFR", b"ACHR", b"ACRE") and not (flags & 0x20) \
+                        and (fid >> 24) >= n_masters:
+                    cidx = cur >> 24
+                    key = (low[cidx] if cidx < n_masters else own_name.lower(), cur & 0xFFFFFF)
+                    cnt, cp = out.get(key, (0, cellpos.get(cur)))
+                    out[key] = (cnt + 1, cp)
+                pos += 24 + size
+            pos = gend
+        return out
+    finally:
+        data.close()
+        f.close()
+
+
+def cell_label(path, pos):
+    """Readable name of a cell record (its editor ID), or ''."""
+    try:
+        r = parse_record(Path(path).read_bytes(), pos)
+        return r["EDID"][0].split(b"\0")[0].decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 # --------------------------------------------------------------------------- MO2 discovery
@@ -731,6 +793,57 @@ def analyse_overlaps(plugins, active, index, min_masters, max_records=MAX_PATCH_
                          "conflicts": conflicts[:25], "n_conflicts": len(conflicts),
                          "reverts": reverts[:25], "n_reverts": len(reverts),
                          "harmless": harmless, "unverified": unverified})
+    # ---- "two mods decorate the same room": new objects added to the same interior cell
+    rooms = defaultdict(dict)
+    for k, n in enumerate(active):
+        if is_vanilla(n) or n.lower() not in index:
+            continue
+        try:
+            for ck, (cnt, cp) in scan_rooms(index[n.lower()], plugins[n]["masters"], n).items():
+                if cnt >= ROOM_MIN:
+                    rooms[ck][n] = (cnt, cp)
+        except Exception:  # noqa: BLE001
+            continue
+        if progress and k % 50 == 0:
+            progress("Looking at rooms... %d/%d" % (k, len(active)))
+    pair_rooms = defaultdict(list)
+    for ck, holders_ in rooms.items():
+        if len(holders_) < 2 or len(holders_) > ROOM_HUB:
+            continue
+        names = sorted(holders_, key=lambda x: order.get(x, 1 << 30))
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                pair_rooms[(names[i], names[j])].append(ck)
+    all_masters = {n: frozenset(m.lower() for m in plugins[n]["masters"]) for n in active if n in plugins}
+    for (a, b), cks in pair_rooms.items():
+        ta = all_masters.get(a, frozenset()); tb = all_masters.get(b, frozenset())
+        if a.lower() in tb or b.lower() in ta:
+            continue                                       # one is built on the other
+        if mod_of and mod_of(a) and mod_of(a) == mod_of(b):
+            continue                                       # same download
+        if any(a.lower() in m and b.lower() in m for c, m in all_masters.items() if c not in (a, b)):
+            continue                                       # a third plugin is made for both: it ties them together
+        for x in (a, b):
+            if x not in kind:
+                kind[x] = classify(x, mod_of(x) if mod_of else None, 1,
+                                   Path(index[x.lower()]).stat().st_size,
+                                   len([m for m in plugins[x]["masters"] if not is_vanilla(m)]))
+        cks.sort(key=lambda ck: -min(rooms[ck][a][0], rooms[ck][b][0]))
+        items = []
+        for ck in cks[:6]:
+            ca, cb = rooms[ck][a], rooms[ck][b]
+            name = cell_label(index[a.lower()], ca[1]) if ca[1] is not None else ""
+            items.append({"record": "CELL", "formid": "%06X" % ck[1], "master": ck[0] + (" - " + name if name else ""),
+                          "lost": ["%d + %d new objects" % (ca[0], cb[0])], "pos": None, "verb": "both add objects to"})
+        overlaps.append({"kind": "overlap", "first": a, "second": b, "shared": len(cks),
+                         "size_first": len(rooms), "size_second": len(rooms), "pct": 0, "types": [("CELL", len(cks))],
+                         "verdict": "OVERLAP", "relation": "two plugins decorate the same room", "rival": False,
+                         "kinds": (kind[a], kind[b]), "obsolete": False,
+                         "hints": ["Both add their own objects to %d of the same room(s). Two sets of furniture and "
+                                   "clutter in one room is a common sign they are not made for each other. Look for a "
+                                   "compatibility patch on their Nexus pages, or use only one." % len(cks)],
+                         "conflicts": items, "n_conflicts": len(cks), "reverts": [], "n_reverts": 0,
+                         "harmless": {}, "unverified": 0})
     rank = {"CONFLICT": 0, "OVERLAP": 1, "UNVERIFIED": 2, "HARMLESS": 3}
     overlaps.sort(key=lambda o: (rank[o["verdict"]], 0 if "patch" in o["kinds"] else 1,
                                  -(o["n_conflicts"] + o["n_reverts"]), -o["shared"]))
@@ -842,8 +955,8 @@ def format_overlaps(overlaps, stats, show_all=False, limit=30):
             out.append("    - %s %s (from %s) both change: %s" % (c["record"], c["formid"], c["master"], flist(c["lost"])))
         out.append("  -> You almost certainly need only ONE of these. Read both Nexus pages, disable one, test.")
         out.append("")
-    out += ["== YELLOW: PATCHES EDITING THE SAME THING (%d) ==" % len(yellow),
-            "(Not rival patches, but they change the same thing differently, or a patch looks obsolete.", " Worth a look, often fine.)", ""]
+    out += ["== YELLOW: WORTH A LOOK (%d) ==" % len(yellow),
+            "(Patches that change the same records differently, plugins that both add objects to the same room,", " or a patch that looks obsolete. Worth a look, often fine.)", ""]
     if not yellow:
         out += ["None found.", ""]
     for o in yellow[:limit]:
@@ -852,7 +965,7 @@ def format_overlaps(overlaps, stats, show_all=False, limit=30):
         out.append("  * %s   (%s, loads first)" % (o["first"], o["kinds"][0].upper()))
         out.append("  * %s   (%s, loads later, WINS)" % (o["second"], o["kinds"][1].upper()))
         for c in (o["conflicts"] + o["reverts"])[:3]:
-            verb = "both change" if c in o["conflicts"] else "later one undoes the earlier one's change to"
+            verb = (c.get("verb") or "both change") if c in o["conflicts"] else "later one undoes the earlier one's change to"
             out.append("    - %s %s (from %s) %s: %s" % (c["record"], c["formid"], c["master"], verb, flist(c["lost"])))
             if c.get("pos"):
                 out.append("      " + pos_text(c["pos"]))
@@ -876,7 +989,7 @@ def format_report(findings, total, unreadable, hidden_weak=0, plugins=None, inde
     plugins, index = plugins or {}, index or {}
     dups = [f for f in findings if f["kind"] == "duplicate_patch"]
     miss = [f for f in findings if f["kind"] == "missing_master"]
-    out = ["Redundant Patch Finder %s" % VERSION, "Scanned %d active plugins." % total, "",
+    out = ["Conflicting Patch Finder %s" % VERSION, "Scanned %d active plugins." % total, "",
            "SUMMARY: %d same-name patch group(s), %d red conflict(s), %d missing master(s)."
            % (len(dups), len([o for o in (overlaps or []) if o["verdict"] == "CONFLICT"]), len(miss)), ""]
     out.append("== PATCHES WITH THE SAME PURPOSE (by name and requirements) (%d) ==" % len(dups))
@@ -1107,7 +1220,7 @@ def build_html(findings, overlaps, ov_stats, total, unreadable, plugins, index, 
             e(c["record"]), e(c["formid"]), e(c["master"]), verb, e(flist(c["lost"])), extra)
 
     def ov_card(o, cls):
-        items = "".join(rec_li(c, "both change") for c in o["conflicts"][:6])
+        items = "".join(rec_li(c, c.get("verb") or "both change") for c in o["conflicts"][:6])
         items += "".join(rec_li(c, "later one undoes the earlier one's change to") for c in o["reverts"][:6])
         n = o["n_conflicts"] + o["n_reverts"]
         more = ("<li>... and %d more records</li>" % (n - 12)) if n > 12 else ""
@@ -1132,8 +1245,7 @@ def build_html(findings, overlaps, ov_stats, total, unreadable, plugins, index, 
         nw = newest_hint(f["plugins"], index)
         red_cards.append('<div class="card %s"><div class="hd"><span class="badge %s">%s</span></div>%s'
                          '<ul class="hint"><li>Open each mod\'s Nexus page, read the description and changelog, disable ONE and test.%s</li></ul></div>' % (
-                             "strong" if f["confidence"] == "HIGH" else "partial",
-                             "strong" if f["confidence"] == "HIGH" else "partial", lab,
+                             "strong", "strong", lab,
                              "".join(plug_block(x) for x in f["plugins"]),
                              (" Hint only: the most recently dated file is <b>%s</b> (newer is not always better)." % e(nw)) if nw else ""))
     yellow_cards = [ov_card(o, "partial") for o in yellow[:CAP]]
@@ -1152,7 +1264,7 @@ def build_html(findings, overlaps, ov_stats, total, unreadable, plugins, index, 
     d = diag_lines()
     if d:
         miss_note += '<div class="note2 warn">' + "<br>".join(e(x.strip()) for x in d if x.strip()) + "</div>"
-    return """<!doctype html><html><head><meta charset="utf-8"><title>Redundant Patch Finder</title><style>
+    return """<!doctype html><html><head><meta charset="utf-8"><title>Conflicting Patch Finder</title><style>
 html{scroll-behavior:smooth}body{background:#14161a;color:#e6e6e6;font:15px/1.5 Segoe UI,system-ui,sans-serif;padding:24px;max-width:1000px;margin:auto}
 h1{margin:0 0 4px}h2{margin-top:34px;border-bottom:1px solid #333;padding-bottom:6px;scroll-margin-top:12px}.muted{color:#8a8f98;font-size:13px}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0 8px}a.tile{flex:1;min-width:170px;background:#1e2127;border-radius:10px;padding:14px;border-left:6px solid #4caf50;color:#e6e6e6;text-decoration:none;cursor:pointer}
@@ -1169,14 +1281,14 @@ ul.lost{margin:10px 0 0 4px;font-size:13px;color:#c9ccd1}ul.hint{margin:10px 0 0
 a{color:#64b5f6}table{width:100%%;border-collapse:collapse}td{padding:6px 8px;border-bottom:1px solid #2a2d33;font-size:14px}
 .ok{color:#81c784}input{width:100%%;padding:10px;border-radius:8px;border:1px solid #333;background:#1e2127;color:#eee;font-size:15px;box-sizing:border-box}
 </style></head><body>
-<h1>Redundant Patch Finder <span class="muted">v%s</span></h1>
+<h1>Conflicting Patch Finder <span class="muted">v%s</span></h1>
 <div class="muted">Scanned %d active plugins, compared the contents of %d plugins. A MOD is a base (like Lux Via). A PATCH fixes how mods work together. This tool only suggests candidates and never changes your files.</div>
 <div class="tiles"><a class="tile red" href="#red"><b>%d</b>Red: rival patches that clash<br><span>Two patches fixing the same thing. Keep one.</span></a>
-<a class="tile yellow" href="#yellow"><b>%d</b>Yellow: patches editing the same thing<br><span>Patches editing the same records differently, or a patch the mod made useless.</span></a>
+<a class="tile yellow" href="#yellow"><b>%d</b>Yellow: worth a look<br><span>Patches editing the same records differently, plugins decorating the same room, or a patch the mod made useless.</span></a>
 <a class="tile" href="#green"><b>%d</b>Green: no problem<br><span>They overlap but do not clash.</span></a></div>%s
 <input id="q" placeholder="Filter by plugin name..." oninput="f()" style="margin-top:14px">
 <h2 id="red">Red: rival patches that clash</h2><div class="cards">%s</div>
-<h2 id="yellow">Yellow: patches editing the same thing</h2><div class="cards">%s</div>
+<h2 id="yellow">Yellow: worth a look</h2><div class="cards">%s</div>
 <h2 id="green">Green: compared, no problem (%d)</h2><details><summary>Show the list</summary><table>%s</table></details>
 <h2 id="missing">Missing masters</h2><table>%s</table>
 <script>function f(){var q=document.getElementById('q').value.toLowerCase();document.querySelectorAll('.cards .card').forEach(function(c){c.style.display=c.textContent.toLowerCase().indexOf(q)<0?'none':''})}</script>
@@ -1198,7 +1310,7 @@ def pause():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Find redundant patches and missing masters. Works with Mod Organizer 2, "
+        description="Find conflicting patches and missing masters. Works with Mod Organizer 2, "
                     "Vortex, Wrye Bash, or no mod manager at all.")
     ap.add_argument("--instance", help="MO2 instance folder (contains ModOrganizer.ini)")
     ap.add_argument("--profile", help="MO2 profile name (default: the one MO2 has selected)")
