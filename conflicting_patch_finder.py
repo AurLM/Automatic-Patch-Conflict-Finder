@@ -1075,11 +1075,27 @@ def run(args):
         if args.instance:
             instance = Path(args.instance)
         else:
+            cwd = Path.cwd()
+            here = [p for p in [cwd] + list(cwd.parents)[:2] if (p / "ModOrganizer.ini").is_file()]
             inst = find_instances()
-            if len(inst) > 1:
-                raise SystemExit("Several MO2 instances found, pick one with --instance:\n  "
-                                 + "\n  ".join(map(str, inst)))
-            instance = inst[0]
+            if here:
+                instance = here[0]          # the program sits inside an MO2 folder: that one wins
+            elif len(inst) > 1:
+                if sys.stdin is not None and sys.stdin.isatty():
+                    print("Several MO2 instances found. Which one do you want to scan?")
+                    for n, p in enumerate(inst, 1):
+                        print("  %d) %s" % (n, p))
+                    while True:
+                        ans = input("Type a number and press Enter: ").strip()
+                        if ans.isdigit() and 1 <= int(ans) <= len(inst):
+                            instance = inst[int(ans) - 1]; break
+                else:
+                    raise SystemExit('Several MO2 instances found. Put this program inside the MO2 folder you want to scan, '
+                                     'or run it with --instance, for example:\n  "Conflicting Patch Finder.exe" --instance "%s"\nInstances found:\n  '
+                                     % inst[0] + "\n  ".join(map(str, inst)))
+            else:
+                instance = inst[0]
+            args.instance = str(instance)
         if not (instance / "ModOrganizer.ini").is_file():
             raise SystemExit("No ModOrganizer.ini in %s" % instance)
         base, sel_profile, game_data = locate_dirs(instance)
